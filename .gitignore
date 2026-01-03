@@ -1,1 +1,9 @@
 __pycache__
+releases/
+*.pyc
+*.csv
+*.csv.bak
+*.csv.md5
+*.csv.md5.bak
+*.lock
+.DS_Store
