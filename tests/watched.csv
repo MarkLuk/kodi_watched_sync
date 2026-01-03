@@ -1,0 +1,4 @@
+filepath,watched,resume_time,last_updated
+path/to/movie.mkv,True,120.5,1767466831.795291
+path/to/avatar.mkv,True,500,1767466831.8054738
+path/to/remote_movie.mkv,True,0.0,1767466831.8146222
