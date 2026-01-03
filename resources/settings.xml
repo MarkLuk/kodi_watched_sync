@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <settings>
     <category label="General">
-        <setting id="db_path" label="Database File Path" type="file" default="" />
+        <setting id="db_folder" label="Database Folder" type="folder" default="" />
         <setting id="sync_on_startup" label="Sync on Startup" type="bool" default="true" />
-        <setting id="sync_interval" label="Sync Interval (Minutes)" type="integer" default="15" />
+        <setting id="sync_interval" label="Sync Interval (Minutes)" type="slider" default="15" range="10,5,120" option="int" />
     </category>
 </settings>

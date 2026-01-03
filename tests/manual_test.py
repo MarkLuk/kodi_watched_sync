@@ -108,13 +108,18 @@ def test_monitor():
 
 def test_service_sync():
     print("Testing Service Sync...")
-    # Setup remote DB with one item
-    db_path = os.path.join(os.getcwd(), "tests", "watched.csv")
-    db = DatabaseManager(db_path)
+    service = SyncService()
+    # Mocking folder selection
+    db_folder = os.path.join(os.getcwd(), "tests")
+    service.addon.setSetting("db_folder", db_folder)
+    # We need to make sure the expected db_path in service matches what we setup
+    expected_db_path = os.path.join(db_folder, "watched_status.csv")
+
+    # Create the db file at the expected location
+    if os.path.exists(expected_db_path): os.remove(expected_db_path)
+    db = DatabaseManager(expected_db_path)
     db.update_item("path/to/remote_movie.mkv", True, 0.0)
 
-    service = SyncService()
-    service.addon.setSetting("db_path", db_path)
     # Manually trigger reload since we set settings after init (in mock)
     service._reload_settings()
 

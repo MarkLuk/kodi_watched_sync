@@ -2,6 +2,7 @@ import xbmc
 import xbmcaddon
 import time
 import json
+import os
 from resources.lib.database import DatabaseManager
 from resources.lib.monitor import WatchedSyncMonitor
 
@@ -15,7 +16,13 @@ class SyncService:
         self._reload_settings()
 
     def _reload_settings(self):
-        self.db_path = self.addon.getSetting("db_path")
+        db_folder = self.addon.getSetting("db_folder")
+        if db_folder:
+            # Join paths using xbmcvfs would be better but os.path is stdlib
+            self.db_path = os.path.join(db_folder, "watched_status.csv")
+        else:
+            self.db_path = ""
+
         try:
             self.sync_interval = int(self.addon.getSetting("sync_interval"))
         except:
