@@ -7,6 +7,23 @@ def delete(path):
     if os.path.exists(path):
         os.remove(path)
 
+def rename(src, dest):
+    if os.path.exists(src):
+        # xbmcvfs.rename logic: if dest exists, it might fail or overwrite.
+        # Python os.rename on Windows fails if dest exists.
+        # xbmcvfs behavior is consistent with OS usually.
+        # My code deletes dest before rename, so os.rename is fine.
+        if os.path.exists(dest):
+             os.remove(dest)
+        os.rename(src, dest)
+        return True
+    return False
+
+import shutil
+def copy(src, dest):
+    shutil.copy2(src, dest)
+    return True
+
 class File:
     def __init__(self, path, mode='r'):
         self.path = path
@@ -27,3 +44,6 @@ class File:
         if self.f:
             self.f.close()
             self.f = None
+
+    def size(self):
+        return os.path.getsize(self.path)

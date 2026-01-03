@@ -31,6 +31,7 @@ def test_database_locking():
     print("Testing Database Locking...")
     db_path = os.path.join(os.getcwd(), "tests", "watched.csv")
     if os.path.exists(db_path): os.remove(db_path)
+    if os.path.exists(db_path + ".bak"): os.remove(db_path + ".bak")
     if os.path.exists(db_path + ".lock"): os.remove(db_path + ".lock")
 
     db = DatabaseManager(db_path)
@@ -70,6 +71,8 @@ def test_database_locking():
 def test_manual_update():
     print("Testing Update...")
     db_path = os.path.join(os.getcwd(), "tests", "watched.csv")
+    if os.path.exists(db_path): os.remove(db_path)
+    if os.path.exists(db_path + ".bak"): os.remove(db_path + ".bak")
     db = DatabaseManager(db_path)
 
     db.update_item("path/to/movie.mkv", True, 120.5)
@@ -121,6 +124,7 @@ def test_service_sync():
 
     # Create the db file at the expected location
     if os.path.exists(expected_db_path): os.remove(expected_db_path)
+    if os.path.exists(expected_db_path + ".bak"): os.remove(expected_db_path + ".bak")
     db = DatabaseManager(expected_db_path)
     db.update_item("path/to/remote_movie.mkv", True, 0.0)
 
@@ -165,6 +169,7 @@ def test_sync_manager():
     print("Testing Sync Manager...")
     db_path = os.path.join(os.getcwd(), "tests", "watched.csv")
     if os.path.exists(db_path): os.remove(db_path)
+    if os.path.exists(db_path + ".bak"): os.remove(db_path + ".bak")
     db = DatabaseManager(db_path)
     from resources.lib.sync import SyncManager
     sync = SyncManager(db)
@@ -231,6 +236,7 @@ def test_script_execution():
 
     # Create DB file so script is happy
     db_path = os.path.join(db_folder, "watched_status.csv")
+    if os.path.exists(db_path + ".bak"): os.remove(db_path + ".bak")
     if not os.path.exists(db_path):
         with open(db_path, 'w') as f: f.write("filepath,watched,resume_time,last_updated\n")
 
@@ -268,6 +274,7 @@ def test_music_video_sync():
     print("Testing Music Video Sync...")
     db_path = os.path.join(os.getcwd(), "tests", "watched.csv")
     if os.path.exists(db_path): os.remove(db_path)
+    if os.path.exists(db_path + ".bak"): os.remove(db_path + ".bak")
     db = DatabaseManager(db_path)
     from resources.lib.sync import SyncManager
     sync = SyncManager(db)
@@ -296,6 +303,7 @@ def test_bulk_update():
     print("Testing Bulk Update...")
     db_path = os.path.join(os.getcwd(), "tests", "watched.csv")
     if os.path.exists(db_path): os.remove(db_path)
+    if os.path.exists(db_path + ".bak"): os.remove(db_path + ".bak")
     db = DatabaseManager(db_path)
 
     # 1. Add multiple items
@@ -311,6 +319,106 @@ def test_bulk_update():
     assert data["movie2.mkv"]['resume_time'] == 120.0
     print("  Bulk Update test passed.")
 
+def test_crash_recovery():
+    print("Testing Crash Recovery...")
+    db_path = os.path.join(os.getcwd(), "tests", "watched.csv")
+    backup_path = db_path + ".bak"
+    md5_path = db_path + ".md5"
+
+    # 1. Setup: Clean all artifacts
+    if os.path.exists(db_path): os.remove(db_path)
+    if os.path.exists(backup_path): os.remove(backup_path)
+    if os.path.exists(md5_path): os.remove(md5_path)
+    if os.path.exists(md5_path + ".bak"): os.remove(md5_path + ".bak")
+
+    # Create backup with valid data
+    with open(backup_path, 'w') as f:
+        f.write("filepath,watched,resume_time,last_updated\n")
+        f.write("backup_movie.mkv,True,0.0,0.0\n")
+
+    # Create empty/corrupt DB
+    with open(db_path, 'w') as f:
+        f.write("") # Empty
+
+    # 2. Init DatabaseManager (should trigger recovery)
+    db = DatabaseManager(db_path)
+
+    # 3. Verify
+    data = db.read_database()
+    assert "backup_movie.mkv" in data
+    print("  Recovery test passed.")
+
+def test_checksum_validation():
+    print("Testing Checksum Validation...")
+    db_path = os.path.join(os.getcwd(), "tests", "watched.csv")
+    backup_path = db_path + ".bak"
+    md5_path = db_path + ".md5"
+
+    if os.path.exists(db_path): os.remove(db_path)
+    if os.path.exists(backup_path): os.remove(backup_path)
+    if os.path.exists(md5_path): os.remove(md5_path)
+
+    # 1. Create a valid Backup and its MD5
+    backup_content = "filepath,watched,resume_time,last_updated\nbackup_movie.mkv,True,0.0,0.0\n"
+    with open(backup_path, 'w') as f:
+        f.write(backup_content)
+
+    import hashlib
+    backup_md5 = hashlib.md5(backup_content.encode('utf-8')).hexdigest()
+    with open(md5_path + ".bak", 'w') as f:
+        f.write(backup_md5)
+
+    # 2. Create a "Corrupt" DB (content changed, but MD5 matches OLD content)
+    content = "filepath,watched,resume_time,last_updated\ncorrupt_movie.mkv,True,0.0,0.0\n"
+    with open(db_path, 'w') as f:
+        f.write(content)
+
+    # Write MD5 for DIFFERENT content (simulating mismatch)
+    import hashlib
+    fake_md5 = hashlib.md5(b"some other content").hexdigest()
+    with open(md5_path, 'w') as f:
+        f.write(fake_md5)
+
+    # 3. Init DB - Should detect mismatch and restore from Backup
+    db = DatabaseManager(db_path)
+
+    # 4. Verify
+    data = db.read_database()
+    assert "backup_movie.mkv" in data
+    assert "corrupt_movie.mkv" not in data
+
+    # Verify MD5 was updated to match restored backup
+    with open(db_path, 'r') as f: restored_content = f.read()
+    with open(md5_path, 'r') as f: stored_md5 = f.read().strip()
+
+    calc_md5 = hashlib.md5(restored_content.encode('utf-8')).hexdigest()
+    assert calc_md5 == stored_md5
+
+    print("  Checksum Validation (Restore Success) test passed.")
+
+    # 5. Test Corrupt Backup Rejection
+    # Corrupt the backup content but keep old backup MD5
+    with open(backup_path, 'w') as f:
+        f.write("corrupted backup content")
+    # backup_md5 still matches "backup_movie.mkv..."
+
+    # Init DB (should fail to recover and maybe start fresh or leave valid DB if valid DB was there)
+    # Let's say we have invalid Main DB and Corrupt Backup. Result should be Empty DB (fresh start).
+    with open(db_path, 'w') as f: f.write("invalid main")
+
+    # Note: we need to write the backup MD5 for this test because our new code checks it
+    import hashlib
+    valid_backup_content = "filepath,watched,resume_time,last_updated\nbackup_movie.mkv,True,0.0,0.0\n"
+    valid_backup_md5 = hashlib.md5(valid_backup_content.encode('utf-8')).hexdigest()
+
+    with open(db_path + ".md5.bak", 'w') as f:
+        f.write(valid_backup_md5)
+
+    db = DatabaseManager(db_path)
+    data = db.read_database()
+    assert len(data) == 0 # Recovery rejected, started fresh (empty)
+    print("  Checksum Validation (Corrupt Backup Rejection) test passed.")
+
 if __name__ == "__main__":
     test_database_locking()
     test_manual_update()
@@ -321,4 +429,6 @@ if __name__ == "__main__":
     test_dynamic_settings()
     test_music_video_sync()
     test_bulk_update()
+    test_crash_recovery()
+    test_checksum_validation()
     print("ALL TESTS PASSED")
