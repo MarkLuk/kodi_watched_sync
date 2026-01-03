@@ -3,6 +3,7 @@ import xbmcaddon
 import time
 import json
 import os
+import resources.lib.logger as logger
 from resources.lib.database import DatabaseManager
 from resources.lib.monitor import WatchedSyncMonitor
 
@@ -18,8 +19,11 @@ class SyncService:
     def _reload_settings(self):
         db_folder = self.addon.getSetting("db_folder")
         if db_folder:
-            # Join paths using xbmcvfs would be better but os.path is stdlib
-            self.db_path = os.path.join(db_folder, "watched_status.csv")
+            # Join paths manually to ensure forward slashes for URLs (os.path.join uses backslash on Windows)
+            if db_folder.endswith("/") or db_folder.endswith("\\"):
+                self.db_path = db_folder + "watched_status.csv"
+            else:
+                self.db_path = db_folder + "/" + "watched_status.csv"
         else:
             self.db_path = ""
 
@@ -38,7 +42,7 @@ class SyncService:
 
     def run(self):
         if self.addon.getSetting("sync_on_startup") == "true":
-            xbmc.log("[WatchedSync] Startup sync initiated.", xbmc.LOGINFO)
+            logger.info("Startup sync initiated.")
             self.perform_sync()
 
         last_sync = time.time()
@@ -49,7 +53,7 @@ class SyncService:
 
             now = time.time()
             if (now - last_sync) > (self.sync_interval * 60) and self.sync_interval > 0:
-                xbmc.log("[WatchedSync] Periodic sync initiated.", xbmc.LOGINFO)
+                logger.info("Periodic sync initiated.")
                 self.perform_sync()
                 last_sync = time.time()
 
@@ -90,7 +94,7 @@ class SyncService:
                         remote_item = remote_data[filepath]
                         self._apply_update_if_needed(media_type, item, remote_item)
         except Exception as e:
-            xbmc.log(f"[WatchedSync] Error syncing {media_type}s: {e}", xbmc.LOGERROR)
+            logger.error(f"Error syncing {media_type}s: {e}")
 
     def _apply_update_if_needed(self, media_type, local_item, remote_item):
         local_watched = local_item.get('playcount', 0) > 0
@@ -114,7 +118,7 @@ class SyncService:
             needs_update = True
 
         if needs_update:
-            xbmc.log(f"[WatchedSync] Updating {local_item['file']} to Watched={remote_watched}, Resume={remote_resume}", xbmc.LOGINFO)
+            logger.info(f"Updating {local_item['file']} to Watched={remote_watched}, Resume={remote_resume}")
             self._set_item_details(media_type, local_item[f'{media_type}id'], updates)
 
     def _set_item_details(self, media_type, item_id, updates):

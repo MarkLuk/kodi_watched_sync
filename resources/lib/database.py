@@ -1,8 +1,10 @@
-import os
+import xbmcvfs
 import csv
 import time
 import xbmc
+import io
 from datetime import datetime
+import resources.lib.logger as logger
 
 class DatabaseManager:
     def __init__(self, db_path):
@@ -11,26 +13,27 @@ class DatabaseManager:
 
     def _acquire_lock(self, timeout=10):
         start_time = time.time()
-        while os.path.exists(self.lock_path):
+        while xbmcvfs.exists(self.lock_path):
             if time.time() - start_time > timeout:
-                xbmc.log(f"[WatchedSync] Timeout waiting for lock: {self.lock_path}", xbmc.LOGWARNING)
+                logger.warn(f"Timeout waiting for lock: {self.lock_path}")
                 return False
             time.sleep(0.5)
 
         try:
-            with open(self.lock_path, 'w') as f:
-                f.write(str(time.time()))
+            f = xbmcvfs.File(self.lock_path, 'w')
+            f.write(str(time.time()))
+            f.close()
             return True
         except Exception as e:
-            xbmc.log(f"[WatchedSync] Failed to acquire lock: {e}", xbmc.LOGERROR)
+            logger.error(f"Failed to acquire lock: {e}")
             return False
 
     def _release_lock(self):
         try:
-            if os.path.exists(self.lock_path):
-                os.remove(self.lock_path)
+            if xbmcvfs.exists(self.lock_path):
+                xbmcvfs.delete(self.lock_path)
         except Exception as e:
-            xbmc.log(f"[WatchedSync] Failed to release lock: {e}", xbmc.LOGERROR)
+            logger.error(f"Failed to release lock: {e}")
 
     def read_database(self):
         """
@@ -39,14 +42,26 @@ class DatabaseManager:
         Value: dict(watched, resume_time, last_updated)
         """
         data = {}
-        if not self.db_path or not os.path.exists(self.db_path):
+        if not self.db_path or not xbmcvfs.exists(self.db_path):
             return data
 
         if not self._acquire_lock():
             return data
 
         try:
-            with open(self.db_path, mode='r', newline='', encoding='utf-8') as csvfile:
+            # Read all content to memory to use standard CSV module
+            f = xbmcvfs.File(self.db_path)
+            content = f.read()
+            f.close()
+
+            # xbmcvfs.File.read() returns string (if text) or bytes.
+            # Usually strict bytes in newer Py, but Kodi python API is sometimes strings.
+            # Assuming string for simplicity or decode. Python 3 strings are unicode.
+            # If content is bytes, decode it.
+            if isinstance(content, bytes):
+                content = content.decode('utf-8')
+
+            with io.StringIO(content) as csvfile:
                 reader = csv.DictReader(csvfile)
                 for row in reader:
                     data[row['filepath']] = {
@@ -55,7 +70,7 @@ class DatabaseManager:
                         'last_updated': float(row['last_updated'])
                     }
         except Exception as e:
-            xbmc.log(f"[WatchedSync] Error reading database: {e}", xbmc.LOGERROR)
+            logger.error(f"Error reading database: {e}")
         finally:
             self._release_lock()
 
@@ -82,8 +97,15 @@ class DatabaseManager:
             fieldnames = ['filepath', 'watched', 'resume_time', 'last_updated']
 
             # Read existing
-            if os.path.exists(self.db_path):
-                with open(self.db_path, mode='r', newline='', encoding='utf-8') as csvfile:
+            if xbmcvfs.exists(self.db_path):
+                f = xbmcvfs.File(self.db_path)
+                content = f.read()
+                f.close()
+
+                if isinstance(content, bytes):
+                    content = content.decode('utf-8')
+
+                with io.StringIO(content) as csvfile:
                     reader = csv.DictReader(csvfile)
                     for row in reader:
                         if row['filepath'] == filepath:
@@ -102,13 +124,17 @@ class DatabaseManager:
                 })
 
             # Write back
-            with open(self.db_path, mode='w', newline='', encoding='utf-8') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(rows)
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+            f = xbmcvfs.File(self.db_path, 'w')
+            f.write(output.getvalue())
+            f.close()
 
         except Exception as e:
-            xbmc.log(f"[WatchedSync] Error updating item: {e}", xbmc.LOGERROR)
+            logger.error(f"Error updating item: {e}")
         finally:
             self._release_lock()
 

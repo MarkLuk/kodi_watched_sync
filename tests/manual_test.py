@@ -10,10 +10,12 @@ sys.path.append(os.path.join(os.getcwd(), 'tests'))
 # Mock modules
 import mock_xbmc as xbmc
 import mock_xbmcaddon as xbmcaddon
+import mock_xbmcvfs as xbmcvfs
 
 # Inject mocks into sys.modules so the real modules use them
 sys.modules['xbmc'] = xbmc
 sys.modules['xbmcaddon'] = xbmcaddon
+sys.modules['xbmcvfs'] = xbmcvfs
 
 # Now import our modules
 # Add parent directory to path

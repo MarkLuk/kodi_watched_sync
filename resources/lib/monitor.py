@@ -1,6 +1,7 @@
 import xbmc
 import json
 import os
+import resources.lib.logger as logger
 
 class WatchedSyncMonitor(xbmc.Monitor):
     def __init__(self, db_manager):
@@ -20,7 +21,7 @@ class WatchedSyncMonitor(xbmc.Monitor):
                     if item_type in ['movie', 'episode'] and item_id:
                         self._process_library_update(item_type, item_id)
             except Exception as e:
-                xbmc.log(f"[WatchedSync] Error processing notification: {e}", xbmc.LOGERROR)
+                logger.error(f"Error processing notification: {e}")
 
     def _process_library_update(self, item_type, item_id):
         # Use JSON-RPC to get full details (file path, playcount, resume)
@@ -49,8 +50,8 @@ class WatchedSyncMonitor(xbmc.Monitor):
                 # Check for settings? We should only sync if db_path is set.
                 # But db_manager handles the check.
 
-                xbmc.log(f"[WatchedSync] Detected update for {filepath}: Watched={watched}, Resume={resume_time}", xbmc.LOGDEBUG)
+                logger.debug(f"Detected update for {filepath}: Watched={watched}, Resume={resume_time}")
                 self.db_manager.update_item(filepath, watched, resume_time)
 
         except Exception as e:
-            xbmc.log(f"[WatchedSync] Error parsing JSON RPC response: {e}", xbmc.LOGERROR)
+            logger.error(f"Error parsing JSON RPC response: {e}")
