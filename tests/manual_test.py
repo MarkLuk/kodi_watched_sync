@@ -264,6 +264,53 @@ def test_dynamic_settings():
     assert service.sync_interval == 60
     print("  Dynamic settings test passed.")
 
+def test_music_video_sync():
+    print("Testing Music Video Sync...")
+    db_path = os.path.join(os.getcwd(), "tests", "watched.csv")
+    if os.path.exists(db_path): os.remove(db_path)
+    db = DatabaseManager(db_path)
+    from resources.lib.sync import SyncManager
+    sync = SyncManager(db)
+
+    # 1. Test Export (Music Video)
+    def mock_rpc_mv_export(cmd):
+        cmd_json = json.loads(cmd)
+        if "GetMusicVideos" in cmd_json['method']:
+             return json.dumps({
+                 "result": {
+                     "musicvideos": [
+                         {"musicvideoid": 5, "file": "path/video.mkv", "playcount": 1, "resume": {"position": 0.0}}
+                     ]
+                 }
+             })
+        return "{}"
+    xbmc.executeJSONRPC = mock_rpc_mv_export
+    sync.sync_local_to_remote()
+
+    data = db.read_database()
+    assert "path/video.mkv" in data
+    assert data["path/video.mkv"]['watched'] == True
+    print("  Music Video Export test passed.")
+
+def test_bulk_update():
+    print("Testing Bulk Update...")
+    db_path = os.path.join(os.getcwd(), "tests", "watched.csv")
+    if os.path.exists(db_path): os.remove(db_path)
+    db = DatabaseManager(db_path)
+
+    # 1. Add multiple items
+    items = {
+        "movie1.mkv": {'watched': True, 'resume_time': 0.0},
+        "movie2.mkv": {'watched': False, 'resume_time': 120.0},
+    }
+    db.update_items(items)
+
+    data = db.read_database()
+    assert len(data) == 2
+    assert data["movie1.mkv"]['watched'] == True
+    assert data["movie2.mkv"]['resume_time'] == 120.0
+    print("  Bulk Update test passed.")
+
 if __name__ == "__main__":
     test_database_locking()
     test_manual_update()
@@ -272,4 +319,6 @@ if __name__ == "__main__":
     test_sync_manager()
     test_script_execution()
     test_dynamic_settings()
+    test_music_video_sync()
+    test_bulk_update()
     print("ALL TESTS PASSED")

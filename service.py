@@ -9,6 +9,10 @@ from resources.lib.monitor import WatchedSyncMonitor
 from resources.lib.sync import SyncManager
 
 class SyncService:
+    """
+    Main service class that runs in the background.
+    Handles startup sync and periodic synchronization of watched status.
+    """
     def __init__(self):
         self.addon = xbmcaddon.Addon()
         self.db_path = ""
@@ -19,6 +23,10 @@ class SyncService:
         self._reload_settings()
 
     def _reload_settings(self):
+        """
+        Loads configuration from addon settings.
+        Initializes DatabaseManager, Monitor, and SyncManager based on configured DB path.
+        """
         db_folder = self.addon.getSetting("db_folder")
         if db_folder:
             # Join paths manually to ensure forward slashes for URLs (os.path.join uses backslash on Windows)
@@ -44,6 +52,10 @@ class SyncService:
                 self.monitor.db_manager = self.db_manager
 
     def run(self):
+        """
+        Main service loop.
+        Executes startup sync if enabled, then waits for abort while checking for periodic sync triggers.
+        """
         if self.addon.getSetting("sync_on_startup") == "true":
             logger.info("Startup sync initiated.")
             self.perform_sync()
@@ -67,6 +79,9 @@ class SyncService:
                 break
 
     def perform_sync(self):
+        """
+        Initiates a synchronization (Import) from the remote DB to the local library.
+        """
         if not self.sync_manager:
             if not self.db_manager:
                  logger.error("Cannot sync: Database folder not configured.")

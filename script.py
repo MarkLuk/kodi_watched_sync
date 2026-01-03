@@ -7,6 +7,10 @@ from resources.lib.database import DatabaseManager
 from resources.lib.sync import SyncManager
 
 def run():
+    """
+    Entry point for manual script execution.
+    Displays a dialog to choose between Import (Sync to Library) and Export (Sync from Library).
+    """
     addon = xbmcaddon.Addon()
     db_folder = addon.getSetting("db_folder")
 

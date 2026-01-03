@@ -5,10 +5,17 @@ import resources.lib.logger as logger
 
 class WatchedSyncMonitor(xbmc.Monitor):
     def __init__(self, db_manager):
+        """
+        Initialize the monitor with a reference to the database manager.
+        """
         xbmc.Monitor.__init__(self)
         self.db_manager = db_manager
 
     def onNotification(self, sender, method, data):
+        """
+        Callback for Kodi notifications.
+        Listens for 'VideoLibrary.OnUpdate' to capture watched status or resume point changes.
+        """
         # Listen for VideoLibrary.OnUpdate to capture watched/resume changes
         if method == "VideoLibrary.OnUpdate":
             try:
@@ -18,16 +25,25 @@ class WatchedSyncMonitor(xbmc.Monitor):
                     item_type = item.get('type')
                     item_id = item.get('id')
 
-                    if item_type in ['movie', 'episode'] and item_id:
+                    if item_type in ['movie', 'episode', 'musicvideo'] and item_id:
                         self._process_library_update(item_type, item_id)
             except Exception as e:
                 logger.error(f"Error processing notification: {e}")
 
     def _process_library_update(self, item_type, item_id):
+        """
+        Fetches details for the updated item and updates the central database.
+        """
+        # Determine correct RPC method name
+        # Movie -> GetMovieDetails, Episode -> GetEpisodeDetails, musicvideo -> GetMusicVideoDetails
+        method_type = item_type.capitalize()
+        if item_type == 'musicvideo':
+             method_type = 'MusicVideo'
+
         # Use JSON-RPC to get full details (file path, playcount, resume)
         json_cmd = {
             "jsonrpc": "2.0",
-            "method": f"VideoLibrary.Get{item_type.capitalize()}Details",
+            "method": f"VideoLibrary.Get{method_type}Details",
             "params": {
                 f"{item_type}id": item_id,
                 "properties": ["file", "playcount", "resume"]

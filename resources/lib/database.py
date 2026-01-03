@@ -8,10 +8,17 @@ import resources.lib.logger as logger
 
 class DatabaseManager:
     def __init__(self, db_path):
+        """
+        Initialize the DatabaseManager with the path to the CSV file.
+        """
         self.db_path = db_path
         self.lock_path = db_path + ".lock"
 
     def _acquire_lock(self, timeout=10):
+        """
+        Acquires an exclusive lock on the database using a .lock file.
+        Waits up to 'timeout' seconds.
+        """
         start_time = time.time()
         while xbmcvfs.exists(self.lock_path):
             if time.time() - start_time > timeout:
@@ -29,6 +36,9 @@ class DatabaseManager:
             return False
 
     def _release_lock(self):
+        """
+        Releases the exclusive lock by deleting the .lock file.
+        """
         try:
             if xbmcvfs.exists(self.lock_path):
                 xbmcvfs.delete(self.lock_path)
@@ -139,14 +149,61 @@ class DatabaseManager:
         finally:
             self._release_lock()
 
-    def sync_local_to_remote_bulk(self, local_status_map):
+    def update_items(self, items):
         """
-        Updates the remote DB with multiple items if they are newer.
-        This is a bit complex. For now, let's just stick to "update_item" for individual events.
-        For bulk sync (startup), we might want to read remote, compare with local, and update whichever is newer.
+        Bulk update items.
+        items: dict of filepath -> { 'watched': bool, 'resume_time': float }
+        """
+        if not self.db_path:
+            return
 
-        Actually, let's implement a method that takes a dict of local state,
-        reads remote, merges them (taking newest), writes back to remote, and returns the changes for local.
-        """
-        pass # To be implemented in service logic or here?
+        if not self._acquire_lock():
+            logger.error(f"Failed to acquire lock: {self.lock_path}")
+            return
+
+        try:
+            current_data = {}
+            fieldnames = ['filepath', 'watched', 'resume_time', 'last_updated']
+
+            # Read existing
+            if xbmcvfs.exists(self.db_path):
+                f = xbmcvfs.File(self.db_path)
+                content = f.read()
+                f.close()
+
+                if isinstance(content, bytes):
+                    content = content.decode('utf-8')
+
+                with io.StringIO(content) as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        current_data[row['filepath']] = row
+
+            now_str = str(time.time())
+
+            # Update with new items
+            for filepath, data in items.items():
+                row = {
+                    'filepath': filepath,
+                    'watched': str(data['watched']),
+                    'resume_time': str(data['resume_time']),
+                    'last_updated': now_str
+                }
+                current_data[filepath] = row
+
+            # Write back
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in current_data.values():
+                writer.writerow(row)
+
+            f = xbmcvfs.File(self.db_path, 'w')
+            f.write(output.getvalue())
+            f.close()
+
+        except Exception as e:
+            logger.error(f"Error updating items: {e}")
+        finally:
+            self._release_lock()
              # Better to keep this class simple IO.

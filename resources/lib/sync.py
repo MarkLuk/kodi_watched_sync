@@ -4,6 +4,9 @@ import resources.lib.logger as logger
 
 class SyncManager:
     def __init__(self, db_manager):
+        """
+        Initialize the SyncManager with a reference to the database manager.
+        """
         self.db_manager = db_manager
 
     def sync_remote_to_local(self):
@@ -21,6 +24,8 @@ class SyncManager:
         self._import_media_type("movie", remote_data)
         # Sync Episodes
         self._import_media_type("episode", remote_data)
+        # Sync Music Videos
+        self._import_media_type("musicvideo", remote_data)
 
     def sync_local_to_remote(self):
         """
@@ -29,15 +34,29 @@ class SyncManager:
         if not self.db_manager:
             return
 
+        updates = {}
         # Export Movies
-        self._export_media_type("movie")
+        self._collect_media_type("movie", updates)
         # Export Episodes
-        self._export_media_type("episode")
+        self._collect_media_type("episode", updates)
+        # Export Music Videos
+        self._collect_media_type("musicvideo", updates)
+
+        if updates:
+            logger.info(f"Exporting {len(updates)} items to database")
+            self.db_manager.update_items(updates)
 
     def _import_media_type(self, media_type, remote_data):
+        """
+        Fetches local library items of a specific type and imports watched status/resume points
+        from the remote data if corrections are needed.
+        """
+        method_type = media_type.capitalize()
+        if media_type == 'musicvideo': method_type = 'MusicVideo'
+
         json_cmd = {
             "jsonrpc": "2.0",
-            "method": f"VideoLibrary.Get{media_type.capitalize()}s",
+            "method": f"VideoLibrary.Get{method_type}s",
             "params": {
                 "properties": ["file", "playcount", "resume"]
             },
@@ -58,6 +77,10 @@ class SyncManager:
             logger.error(f"Error importing {media_type}s: {e}")
 
     def _apply_import_if_needed(self, media_type, local_item, remote_item):
+        """
+        Compares local item state with remote item state and applies updates to the local library
+        if differences exceed thresholds (different watched status or >1s resume diff).
+        """
         local_watched = local_item.get('playcount', 0) > 0
         local_resume = local_item.get('resume', {}).get('position', 0.0)
 
@@ -79,10 +102,17 @@ class SyncManager:
             logger.info(f"Importing {local_item['file']} to Watched={remote_watched}, Resume={remote_resume}")
             self._set_item_details(media_type, local_item[f'{media_type}id'], updates)
 
-    def _export_media_type(self, media_type):
+    def _collect_media_type(self, media_type, updates):
+        """
+        Fetches local library items of a specific type and adds them to the updates dictionary
+        to be used for bulk database export.
+        """
+        method_type = media_type.capitalize()
+        if media_type == 'musicvideo': method_type = 'MusicVideo'
+
         json_cmd = {
             "jsonrpc": "2.0",
-            "method": f"VideoLibrary.Get{media_type.capitalize()}s",
+            "method": f"VideoLibrary.Get{method_type}s",
             "params": {
                 "properties": ["file", "playcount", "resume"]
             },
@@ -101,21 +131,23 @@ class SyncManager:
                     resume_time = resume.get('position', 0.0)
                     watched = playcount > 0
 
-                    # We blindly update the DB with local state for all items
-                    # Optimization: Could read DB first and check if update is needed,
-                    # but database.py handles updates safely.
-                    # Actually, calling update_item for every single item might be slow due to locking overhead per call.
-                    # But for now, let's keep it simple.
-
-                    self.db_manager.update_item(filepath, watched, resume_time)
-
+                    updates[filepath] = {
+                        'watched': watched,
+                        'resume_time': resume_time
+                    }
         except Exception as e:
             logger.error(f"Error exporting {media_type}s: {e}")
 
     def _set_item_details(self, media_type, item_id, updates):
+        """
+        Updates the properties of a specific library item via JSON-RPC.
+        """
+        method_type = media_type.capitalize()
+        if media_type == 'musicvideo': method_type = 'MusicVideo'
+
         json_cmd = {
             "jsonrpc": "2.0",
-            "method": f"VideoLibrary.Set{media_type.capitalize()}Details",
+            "method": f"VideoLibrary.Set{method_type}Details",
             "params": {
                 f"{media_type}id": item_id,
                 **updates
