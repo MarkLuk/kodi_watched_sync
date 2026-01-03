@@ -15,7 +15,7 @@ class DatabaseManager:
         start_time = time.time()
         while xbmcvfs.exists(self.lock_path):
             if time.time() - start_time > timeout:
-                logger.warn(f"Timeout waiting for lock: {self.lock_path}")
+                logger.error(f"Timeout waiting for lock: {self.lock_path}")
                 return False
             time.sleep(0.5)
 
@@ -46,6 +46,7 @@ class DatabaseManager:
             return data
 
         if not self._acquire_lock():
+            logger.error(f"Failed to acquire lock: {self.lock_path}")
             return data
 
         try:

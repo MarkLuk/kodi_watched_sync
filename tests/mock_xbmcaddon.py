@@ -1,9 +1,11 @@
 class Addon:
+    _settings = {}
+
     def __init__(self, id=None):
-        self.settings = {}
+        pass
 
     def getSetting(self, id):
-        return self.settings.get(id, "")
+        return self._settings.get(id, "")
 
     def setSetting(self, id, value):
-        self.settings[id] = value
+        self._settings[id] = value
