@@ -11,5 +11,8 @@
     <summary lang="en_GB">Synchronize watched status between Kodi instances</summary>
     <description lang="en_GB">Synchronizes watched status and resume points to a central CSV file.</description>
     <platform>all</platform>
+    <assets>
+        <icon>icon.png</icon>
+    </assets>
   </extension>
 </addon>
