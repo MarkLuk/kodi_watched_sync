@@ -1,0 +1,2 @@
+Kodistubs  # For autocomplete of xbmc, xbmcgui, etc.
+ruff       # Linter/Formatter used in devcontainer
