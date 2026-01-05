@@ -4,6 +4,7 @@ import time
 import xbmc
 import io
 import hashlib
+import threading
 from datetime import datetime
 import resources.lib.logger as logger
 
@@ -17,6 +18,7 @@ class DatabaseManager:
         self.backup_path = db_path + ".bak"
         self.md5_path = db_path + ".md5"
         self.backup_md5_path = self.md5_path + ".bak"
+        self.local_lock = threading.RLock()
         self._check_and_recover()
 
     def _calculate_checksum(self, content):
@@ -36,6 +38,12 @@ class DatabaseManager:
 
         If invalid, attempts to recover from backup (verifying backup integrity first).
         """
+        # _check_and_recover called in init, so no local lock needed yet (or we can add it to be safe)
+        # But generally init is single threaded.
+        if not self._acquire_lock():
+            logger.warn("Could not acquire lock during database initialization/recovery check. Skipping.")
+            return
+
         try:
             db_valid = False
 
@@ -111,36 +119,82 @@ class DatabaseManager:
                     logger.warn("No backup found. Starting fresh.")
         except Exception as e:
             logger.error(f"Error during database recovery check: {e}")
+            import traceback
             traceback.print_exc()
+        finally:
+            self._release_lock()
 
     def _acquire_lock(self, timeout=10):
         """
-        Acquires an exclusive lock on the database using a .lock file.
-        Waits up to 'timeout' seconds.
+        Acquires an exclusive lock on the database using Directory Locking (atomic mkdir).
+        1. Attempt to create lock directory `self.lock_path`.
+        2. If success, write `lease` file inside.
+        3. If fail (exists), check `lease` file for staleness.
         """
+        import uuid
+        import socket
+
+        host = socket.gethostname()
+        unique_id = str(uuid.uuid4())
+
+        # Lock is now a directory
+        lease_file = self.lock_path + "/lease"
+
         start_time = time.time()
-        while xbmcvfs.exists(self.lock_path):
+
+        while True:
+            # Check for timeout
             if time.time() - start_time > timeout:
                 logger.error(f"Timeout waiting for lock: {self.lock_path}")
                 return False
-            time.sleep(0.5)
 
-        try:
-            f = xbmcvfs.File(self.lock_path, 'w')
-            f.write(str(time.time()))
-            f.close()
-            return True
-        except Exception as e:
-            logger.error(f"Failed to acquire lock: {e}")
-            return False
+            # Attempt atomic mkdir
+            if xbmcvfs.mkdir(self.lock_path):
+                # Success! We own the lock.
+                # Write lease info
+                try:
+                    f = xbmcvfs.File(lease_file, 'w')
+                    f.write(f"{host}:{unique_id}:{time.time()}")
+                    f.close()
+                    return True
+                except Exception as e:
+                    logger.error(f"Failed to write lease file: {e}")
+                    # Release directory if lease fails
+                    xbmcvfs.rmdir(self.lock_path)
+                    return False
+            else:
+                # Lock held. Check for stale lock via lease file.
+                try:
+                    if xbmcvfs.exists(lease_file):
+                        f_lock = xbmcvfs.File(lease_file)
+                        lock_content = f_lock.read()
+                        f_lock.close()
+
+                        parts = lock_content.split(':')
+                        if len(parts) >= 3:
+                            lock_start = float(parts[2])
+                            # Stale lock threshold: 60 seconds (1 minute) if user kept that edit
+                            if time.time() - lock_start > 60:
+                                logger.warn(f"Found stale lock (Age: {time.time() - lock_start}s). Forcing cleanup.")
+                                xbmcvfs.delete(lease_file)
+                                xbmcvfs.rmdir(self.lock_path)
+                                continue
+                except Exception as e:
+                     logger.debug(f"Could not check stale lock: {e}")
+
+                time.sleep(0.2)
+                continue
 
     def _release_lock(self):
         """
-        Releases the exclusive lock by deleting the .lock file.
+        Releases the exclusive lock by removing the lease file and lock directory.
         """
+        lease_file = self.lock_path + "/lease"
         try:
+            if xbmcvfs.exists(lease_file):
+                xbmcvfs.delete(lease_file)
             if xbmcvfs.exists(self.lock_path):
-                xbmcvfs.delete(self.lock_path)
+                xbmcvfs.rmdir(self.lock_path)
         except Exception as e:
             logger.error(f"Failed to release lock: {e}")
 
@@ -150,41 +204,42 @@ class DatabaseManager:
         Key: filepath
         Value: dict(watched, resume_time, last_updated)
         """
-        data = {}
-        if not self.db_path or not xbmcvfs.exists(self.db_path):
+        with self.local_lock:
+            data = {}
+            if not self.db_path or not xbmcvfs.exists(self.db_path):
+                return data
+
+            if not self._acquire_lock():
+                logger.error(f"Failed to acquire lock: {self.lock_path}")
+                return data
+
+            try:
+                # Read all content to memory to use standard CSV module
+                f = xbmcvfs.File(self.db_path)
+                content = f.read()
+                f.close()
+
+                # xbmcvfs.File.read() returns string (if text) or bytes.
+                # Usually strict bytes in newer Py, but Kodi python API is sometimes strings.
+                # Assuming string for simplicity or decode. Python 3 strings are unicode.
+                # If content is bytes, decode it.
+                if isinstance(content, bytes):
+                    content = content.decode('utf-8')
+
+                with io.StringIO(content) as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        data[row['filepath']] = {
+                            'watched': row['watched'] == 'True',
+                            'resume_time': float(row['resume_time']),
+                            'last_updated': float(row['last_updated'])
+                        }
+            except Exception as e:
+                logger.error(f"Error reading database: {e}")
+            finally:
+                self._release_lock()
+
             return data
-
-        if not self._acquire_lock():
-            logger.error(f"Failed to acquire lock: {self.lock_path}")
-            return data
-
-        try:
-            # Read all content to memory to use standard CSV module
-            f = xbmcvfs.File(self.db_path)
-            content = f.read()
-            f.close()
-
-            # xbmcvfs.File.read() returns string (if text) or bytes.
-            # Usually strict bytes in newer Py, but Kodi python API is sometimes strings.
-            # Assuming string for simplicity or decode. Python 3 strings are unicode.
-            # If content is bytes, decode it.
-            if isinstance(content, bytes):
-                content = content.decode('utf-8')
-
-            with io.StringIO(content) as csvfile:
-                reader = csv.DictReader(csvfile)
-                for row in reader:
-                    data[row['filepath']] = {
-                        'watched': row['watched'] == 'True',
-                        'resume_time': float(row['resume_time']),
-                        'last_updated': float(row['last_updated'])
-                    }
-        except Exception as e:
-            logger.error(f"Error reading database: {e}")
-        finally:
-            self._release_lock()
-
-        return data
 
     def _write_file_safely(self, content):
         """
@@ -196,6 +251,30 @@ class DatabaseManager:
         """
         temp_path = self.db_path + ".tmp"
         temp_md5_path = self.md5_path + ".tmp"
+
+        try:
+            # Debug: Check for shrinkage
+            current_lines = 0
+            if xbmcvfs.exists(self.db_path):
+                f_sz = xbmcvfs.File(self.db_path)
+                old_content = f_sz.read()
+                f_sz.close()
+
+                if isinstance(old_content, bytes):
+                    old_content = old_content.decode('utf-8')
+
+                current_lines = len(old_content.strip().splitlines())
+
+            new_lines = len(content.strip().splitlines())
+
+            logger.info(f"Writing database. Old lines: {current_lines}, New lines: {new_lines}")
+
+            if current_lines > 0 and new_lines < current_lines:
+                logger.error(f"DATABASE SHRINK DETECTED! {current_lines} lines -> {new_lines} lines")
+                import traceback
+                logger.error("Stack Trace:\n" + "".join(traceback.format_stack()))
+        except Exception as e_debug:
+            logger.warn(f"Error in debug check: {e_debug}")
 
         try:
             # 1. Write to temp
@@ -244,115 +323,130 @@ class DatabaseManager:
         """
         Updates a single item in the database.
         """
-        if not self.db_path:
-            return
+        with self.local_lock:
+            if not self.db_path:
+                return
 
-        if not self._acquire_lock():
-            return
+            if not self._acquire_lock():
+                return
 
-        try:
-            # Read all existing data first (to preserve other entries)
-            # Note: Optimized approach would be to read without lock first,
-            # but to ensure consistency we read with lock held or we trust read_database logic if we separate it.
-            # But here we are already holding the lock.
+            try:
+                # Read all existing data first (to preserve other entries)
+                # Note: Optimized approach would be to read without lock first,
+                # but to ensure consistency we read with lock held or we trust read_database logic if we separate it.
+                # But here we are already holding the lock.
 
-            rows = []
-            file_exists = False
-            fieldnames = ['filepath', 'watched', 'resume_time', 'last_updated']
+                rows = []
+                file_exists = False
+                fieldnames = ['filepath', 'watched', 'resume_time', 'last_updated']
 
-            # Read existing
-            if xbmcvfs.exists(self.db_path):
-                f = xbmcvfs.File(self.db_path)
-                content = f.read()
-                f.close()
+                # Read existing
+                if xbmcvfs.exists(self.db_path):
+                    f = xbmcvfs.File(self.db_path)
+                    content = f.read()
+                    f.close()
 
-                if isinstance(content, bytes):
-                    content = content.decode('utf-8')
+                    if isinstance(content, bytes):
+                        content = content.decode('utf-8')
 
-                with io.StringIO(content) as csvfile:
-                    reader = csv.DictReader(csvfile)
-                    for row in reader:
-                        if row['filepath'] == filepath:
-                            row['watched'] = str(watched)
-                            row['resume_time'] = str(resume_time)
-                            row['last_updated'] = str(time.time())
-                            file_exists = True
-                        rows.append(row)
+                    with io.StringIO(content) as csvfile:
+                        reader = csv.DictReader(csvfile)
+                        for row in reader:
+                            if row['filepath'] == filepath:
+                                # Debounce check: only update if changed significantly
+                                try:
+                                    old_watched = row['watched'] == 'True'
+                                    old_resume = float(row.get('resume_time', 0))
+                                    diff = abs(old_resume - resume_time)
+                                    # If watched status same AND resume time diff < 5 secs, skip
+                                    if old_watched == watched and diff < 5.0:
+                                        logger.debug(f"Skipping update for {filepath}: No significant change (Diff: {diff}s)")
+                                        # Since we are inside the try block, returning here will trigger finally -> release_lock
+                                        return
+                                except Exception as parse_e:
+                                    logger.warn(f"Error checking debounce: {parse_e}")
 
-            if not file_exists:
-                rows.append({
-                    'filepath': filepath,
-                    'watched': str(watched),
-                    'resume_time': str(resume_time),
-                    'last_updated': str(time.time())
-                })
+                                row['watched'] = str(watched)
+                                row['resume_time'] = str(resume_time)
+                                row['last_updated'] = str(time.time())
+                                file_exists = True
+                            rows.append(row)
 
-            # Write safely
-            output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
+                if not file_exists:
+                    rows.append({
+                        'filepath': filepath,
+                        'watched': str(watched),
+                        'resume_time': str(resume_time),
+                        'last_updated': str(time.time())
+                    })
 
-            self._write_file_safely(output.getvalue())
+                # Write safely
+                output = io.StringIO()
+                writer = csv.DictWriter(output, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
 
-        except Exception as e:
-            logger.error(f"Error updating item: {e}")
-        finally:
-            self._release_lock()
+                self._write_file_safely(output.getvalue())
+
+            except Exception as e:
+                logger.error(f"Error updating item: {e}")
+            finally:
+                self._release_lock()
 
     def update_items(self, items):
         """
         Bulk update items.
         items: dict of filepath -> { 'watched': bool, 'resume_time': float }
         """
-        if not self.db_path:
-            return
+        with self.local_lock:
+            if not self.db_path:
+                return
 
-        if not self._acquire_lock():
-            logger.error(f"Failed to acquire lock: {self.lock_path}")
-            return
+            if not self._acquire_lock():
+                logger.error(f"Failed to acquire lock: {self.lock_path}")
+                return
 
-        try:
-            current_data = {}
-            fieldnames = ['filepath', 'watched', 'resume_time', 'last_updated']
+            try:
+                current_data = {}
+                fieldnames = ['filepath', 'watched', 'resume_time', 'last_updated']
 
-            # Read existing
-            if xbmcvfs.exists(self.db_path):
-                f = xbmcvfs.File(self.db_path)
-                content = f.read()
-                f.close()
+                # Read existing
+                if xbmcvfs.exists(self.db_path):
+                    f = xbmcvfs.File(self.db_path)
+                    content = f.read()
+                    f.close()
 
-                if isinstance(content, bytes):
-                    content = content.decode('utf-8')
+                    if isinstance(content, bytes):
+                        content = content.decode('utf-8')
 
-                with io.StringIO(content) as csvfile:
-                    reader = csv.DictReader(csvfile)
-                    for row in reader:
-                        current_data[row['filepath']] = row
+                    with io.StringIO(content) as csvfile:
+                        reader = csv.DictReader(csvfile)
+                        for row in reader:
+                            current_data[row['filepath']] = row
 
-            now_str = str(time.time())
+                now_str = str(time.time())
 
-            # Update with new items
-            for filepath, data in items.items():
-                row = {
-                    'filepath': filepath,
-                    'watched': str(data['watched']),
-                    'resume_time': str(data['resume_time']),
-                    'last_updated': now_str
-                }
-                current_data[filepath] = row
+                # Update with new items
+                for filepath, data in items.items():
+                    row = {
+                        'filepath': filepath,
+                        'watched': str(data['watched']),
+                        'resume_time': str(data['resume_time']),
+                        'last_updated': now_str
+                    }
+                    current_data[filepath] = row
 
-            # Write safely
-            output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in current_data.values():
-                writer.writerow(row)
+                # Write safely
+                output = io.StringIO()
+                writer = csv.DictWriter(output, fieldnames=fieldnames)
+                writer.writeheader()
+                for row in current_data.values():
+                    writer.writerow(row)
 
-            self._write_file_safely(output.getvalue())
+                self._write_file_safely(output.getvalue())
 
-        except Exception as e:
-            logger.error(f"Error updating items: {e}")
-        finally:
-            self._release_lock()
-             # Better to keep this class simple IO.
+            except Exception as e:
+                logger.error(f"Error updating items: {e}")
+            finally:
+                self._release_lock()
+                 # Better to keep this class simple IO.

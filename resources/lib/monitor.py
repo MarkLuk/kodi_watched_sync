@@ -1,6 +1,7 @@
 import xbmc
 import json
 import os
+import threading
 import resources.lib.logger as logger
 
 class WatchedSyncMonitor(xbmc.Monitor):
@@ -10,6 +11,9 @@ class WatchedSyncMonitor(xbmc.Monitor):
         """
         xbmc.Monitor.__init__(self)
         self.db_manager = db_manager
+        self.batch_queue = {}
+        self.batch_timer = None
+        self.queue_lock = threading.Lock()
 
     def onNotification(self, sender, method, data):
         """
@@ -30,9 +34,22 @@ class WatchedSyncMonitor(xbmc.Monitor):
             except Exception as e:
                 logger.error(f"Error processing notification: {e}")
 
+    def _flush_queue(self):
+        """
+        Flushes the batch queue to the database.
+        """
+        with self.queue_lock:
+            items_to_sync = self.batch_queue.copy()
+            self.batch_queue.clear()
+            self.batch_timer = None
+
+        if items_to_sync:
+            logger.info(f"Flushing batch queue with {len(items_to_sync)} items.")
+            self.db_manager.update_items(items_to_sync)
+
     def _process_library_update(self, item_type, item_id):
         """
-        Fetches details for the updated item and updates the central database.
+        Fetches details for the updated item and queues it for update.
         """
         # Determine correct RPC method name
         # Movie -> GetMovieDetails, Episode -> GetEpisodeDetails, musicvideo -> GetMusicVideoDetails
@@ -66,8 +83,14 @@ class WatchedSyncMonitor(xbmc.Monitor):
                 # Check for settings? We should only sync if db_path is set.
                 # But db_manager handles the check.
 
-                logger.debug(f"Detected update for {filepath}: Watched={watched}, Resume={resume_time}")
-                self.db_manager.update_item(filepath, watched, resume_time)
+                logger.debug(f"Queuing update for {filepath}: Watched={watched}, Resume={resume_time}")
+
+                with self.queue_lock:
+                    self.batch_queue[filepath] = {'watched': watched, 'resume_time': resume_time}
+                    if not self.batch_timer:
+                        # 5 second buffer
+                        self.batch_timer = threading.Timer(5.0, self._flush_queue)
+                        self.batch_timer.start()
 
         except Exception as e:
             logger.error(f"Error parsing JSON RPC response: {e}")

@@ -19,6 +19,18 @@ def rename(src, dest):
         return True
     return False
 
+def mkdir(path):
+    if os.path.exists(path):
+        return False
+    os.mkdir(path)
+    return True
+
+def rmdir(path):
+    if os.path.exists(path):
+        os.rmdir(path)
+        return True
+    return False
+
 import shutil
 def copy(src, dest):
     shutil.copy2(src, dest)

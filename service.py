@@ -56,13 +56,20 @@ class SyncService:
         Main service loop.
         Executes startup sync if enabled, then waits for abort while checking for periodic sync triggers.
         """
-        if self.addon.getSetting("sync_on_startup") == "true":
-            logger.info("Startup sync initiated.")
-            self.perform_sync()
+        if self.addon.getSetting("enable_service") != "true":
+            pass
+        else:
+            if self.addon.getSetting("sync_on_startup") == "true":
+                logger.info("Startup sync initiated.")
+                self.perform_sync()
 
         last_sync = time.time()
 
         while not self.monitor.abortRequested():
+            if self.addon.getSetting("enable_service") != "true":
+                self.monitor.waitForAbort(5)
+                continue
+
             # Reload sync interval dynamically
             try:
                 self.sync_interval = int(self.addon.getSetting("sync_interval"))
