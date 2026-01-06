@@ -19,6 +19,8 @@ class DatabaseManager:
         self.md5_path = db_path + ".md5"
         self.backup_md5_path = self.md5_path + ".bak"
         self.local_lock = threading.RLock()
+        self.lock_token = None
+        self.lock_stale_seconds = 600
         self._check_and_recover()
 
     def _calculate_checksum(self, content):
@@ -136,6 +138,7 @@ class DatabaseManager:
 
         host = socket.gethostname()
         unique_id = str(uuid.uuid4())
+        token = f"{host}:{unique_id}"
 
         # Lock is now a directory
         lease_file = self.lock_path + "/lease"
@@ -154,14 +157,21 @@ class DatabaseManager:
                 # Write lease info
                 try:
                     f = xbmcvfs.File(lease_file, 'w')
-                    f.write(f"{host}:{unique_id}:{time.time()}")
+                    f.write(f"{token}:{time.time()}")
                     f.close()
-                    return True
+                    # Verify lease ownership in case backend is not strictly atomic
+                    if self._lease_matches(lease_file, token):
+                        self.lock_token = token
+                        return True
+                    logger.warn("Lease verification failed after lock acquisition; releasing and retrying.")
                 except Exception as e:
                     logger.error(f"Failed to write lease file: {e}")
-                    # Release directory if lease fails
-                    xbmcvfs.rmdir(self.lock_path)
-                    return False
+                # Release directory if lease fails or verification fails
+                if xbmcvfs.exists(lease_file):
+                    xbmcvfs.delete(lease_file)
+                xbmcvfs.rmdir(self.lock_path)
+                time.sleep(0.2)
+                continue
             else:
                 # Lock held. Check for stale lock via lease file.
                 try:
@@ -170,15 +180,16 @@ class DatabaseManager:
                         lock_content = f_lock.read()
                         f_lock.close()
 
-                        parts = lock_content.split(':')
-                        if len(parts) >= 3:
-                            lock_start = float(parts[2])
-                            # Stale lock threshold: 60 seconds (1 minute) if user kept that edit
-                            if time.time() - lock_start > 60:
-                                logger.warn(f"Found stale lock (Age: {time.time() - lock_start}s). Forcing cleanup.")
-                                xbmcvfs.delete(lease_file)
-                                xbmcvfs.rmdir(self.lock_path)
-                                continue
+                        _token_part, ts_part = lock_content.rsplit(':', 1)
+                        lock_start = float(ts_part)
+                        if time.time() - lock_start > self.lock_stale_seconds:
+                            logger.warn(
+                                f"Found stale lock (Age: {time.time() - lock_start}s). "
+                                "Attempting cleanup."
+                            )
+                            xbmcvfs.delete(lease_file)
+                            xbmcvfs.rmdir(self.lock_path)
+                            continue
                 except Exception as e:
                      logger.debug(f"Could not check stale lock: {e}")
 
@@ -191,12 +202,31 @@ class DatabaseManager:
         """
         lease_file = self.lock_path + "/lease"
         try:
-            if xbmcvfs.exists(lease_file):
-                xbmcvfs.delete(lease_file)
+            if xbmcvfs.exists(lease_file) and self.lock_token:
+                if self._lease_matches(lease_file, self.lock_token):
+                    xbmcvfs.delete(lease_file)
+                else:
+                    logger.warn("Lease token mismatch on release; leaving lock in place.")
+                    return
             if xbmcvfs.exists(self.lock_path):
                 xbmcvfs.rmdir(self.lock_path)
         except Exception as e:
             logger.error(f"Failed to release lock: {e}")
+        finally:
+            self.lock_token = None
+
+    def _lease_matches(self, lease_file, token):
+        """
+        Ensures the lease file belongs to this process before releasing.
+        """
+        try:
+            f_lock = xbmcvfs.File(lease_file)
+            lock_content = f_lock.read()
+            f_lock.close()
+            return lock_content.startswith(f"{token}:")
+        except Exception as e:
+            logger.debug(f"Could not read lease file for verification: {e}")
+            return False
 
     def read_database(self):
         """
