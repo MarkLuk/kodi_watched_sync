@@ -21,6 +21,8 @@ class DatabaseManager:
         self.local_lock = threading.RLock()
         self.lock_token = None
         self.lock_stale_seconds = 600
+        self.local_updates = {}
+        self.local_updates_lock = threading.Lock()
         self._check_and_recover()
 
     def _calculate_checksum(self, content):
@@ -271,6 +273,30 @@ class DatabaseManager:
 
             return data
 
+    def recently_updated(self, filepath, window_seconds):
+        """
+        Returns True if the local item was updated recently.
+        """
+        now = time.time()
+        with self.local_updates_lock:
+            ts = self.local_updates.get(filepath)
+            if ts is None:
+                return False
+            if now - ts > window_seconds:
+                self.local_updates.pop(filepath, None)
+                return False
+            return True
+
+    def _record_local_update(self, filepath):
+        with self.local_updates_lock:
+            self.local_updates[filepath] = time.time()
+
+    def _record_local_updates(self, items):
+        with self.local_updates_lock:
+            now = time.time()
+            for filepath in items:
+                self.local_updates[filepath] = now
+
     def _write_file_safely(self, content):
         """
         Writes content to the database safely:
@@ -417,6 +443,7 @@ class DatabaseManager:
                 writer.writerows(rows)
 
                 self._write_file_safely(output.getvalue())
+                self._record_local_update(filepath)
 
             except Exception as e:
                 logger.error(f"Error updating item: {e}")
@@ -474,6 +501,7 @@ class DatabaseManager:
                     writer.writerow(row)
 
                 self._write_file_safely(output.getvalue())
+                self._record_local_updates(items.keys())
 
             except Exception as e:
                 logger.error(f"Error updating items: {e}")

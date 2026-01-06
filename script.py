@@ -1,9 +1,8 @@
 import xbmc
 import xbmcgui
 import xbmcaddon
-import os
 import resources.lib.logger as logger
-from resources.lib.database import DatabaseManager
+from resources.lib.storage import get_db_manager
 from resources.lib.sync import SyncManager
 
 def run():
@@ -12,19 +11,10 @@ def run():
     Displays a dialog to choose between Import (Sync to Library) and Export (Sync from Library).
     """
     addon = xbmcaddon.Addon()
-    db_folder = addon.getSetting("db_folder")
-
-    if not db_folder:
-        xbmcgui.Dialog().ok("Watched Sync", "Please configure the database folder in settings first.")
+    db_manager = get_db_manager(addon)
+    if not db_manager:
+        xbmcgui.Dialog().ok("Watched Sync", "Please configure the database settings in addon settings.")
         return
-
-    # Path logic duplicated from service.py, could be centralized in a helper
-    if db_folder.endswith("/") or db_folder.endswith("\\"):
-        db_path = db_folder + "watched_status.csv"
-    else:
-        db_path = db_folder + "/" + "watched_status.csv"
-
-    db_manager = DatabaseManager(db_path)
     sync_manager = SyncManager(db_manager)
 
     # options = ["Import from DB (Sync to Library)", "Export to DB (Sync from Library)"]

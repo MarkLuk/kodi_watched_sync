@@ -8,6 +8,7 @@ class SyncManager:
         Initialize the SyncManager with a reference to the database manager.
         """
         self.db_manager = db_manager
+        self.import_guard_seconds = 15
 
     def sync_remote_to_local(self):
         """
@@ -102,6 +103,11 @@ class SyncManager:
             needs_update = True
 
         if needs_update:
+            if hasattr(self.db_manager, "recently_updated"):
+                filepath = local_item.get("file")
+                if filepath and self.db_manager.recently_updated(filepath, self.import_guard_seconds):
+                    logger.info(f"Skipping import for {filepath}: recent local update.")
+                    return
             logger.info(f"Importing {local_item['file']} to Watched={remote_watched}, Resume={remote_resume}")
             self._set_item_details(media_type, local_item[f'{media_type}id'], updates)
 
@@ -143,7 +149,7 @@ class SyncManager:
 
                         # Logic: Update if watched status changed OR resume time changed significantly (>5s?)
                         # Use 1s to be consistent with import logic, or maybe slightly looser for export to avoid flutter
-                        # existing debounce in database.py is 5.0s, let's use 1.0s here to catch small changes but match import.
+                        # existing debounce in database_csv.py is 5.0s, let's use 1.0s here to catch small changes but match import.
 
                         watched_changed = (watched != remote_watched)
                         resume_changed = (abs(resume_time - remote_resume) > 1.0)

@@ -23,7 +23,7 @@ sys.modules['xbmcgui'] = xbmcgui
 # Add parent directory to path
 sys.path.append(os.getcwd())
 
-from resources.lib.database import DatabaseManager
+from resources.lib.database_csv import DatabaseManager
 from resources.lib.monitor import WatchedSyncMonitor
 from service import SyncService
 

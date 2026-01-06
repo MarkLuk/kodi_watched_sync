@@ -1,6 +1,6 @@
 import xbmc
 
-PREFIX = "[WatchedSync]"
+PREFIX = "[service.watched.sync]"
 
 def debug(msg):
     """Logs a debug message with the addon prefix."""

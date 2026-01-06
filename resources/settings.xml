@@ -2,8 +2,15 @@
 <settings>
     <category label="General">
         <setting id="enable_service" label="Enable Sync Service" type="bool" default="false" />
-        <setting id="db_folder" label="Database Folder" type="folder" default="" />
-        <setting id="sync_on_startup" label="Sync on Startup" type="bool" default="true" />
+        <setting id="storage_backend" label="Storage Backend" type="enum" values="CSV|MariaDB" default="0" />
+        <setting id="db_folder" label="Database Folder" type="folder" default="" visible="eq(-1,0)" />
+        <setting id="mariadb_host" label="MariaDB Host" type="text" default="" visible="eq(-2,1)" />
+        <setting id="mariadb_port" label="MariaDB Port" type="number" default="3306" visible="eq(-3,1)" />
+        <setting id="mariadb_database" label="MariaDB Database" type="text" default="watched_sync" visible="eq(-4,1)" />
+        <setting id="mariadb_user" label="MariaDB User" type="text" default="kodi" visible="eq(-5,1)" />
+        <setting id="mariadb_password" label="MariaDB Password" type="text" option="hidden" default="watched_sync_password" visible="eq(-6,1)" />
+        <setting id="mariadb_table" label="MariaDB Table" type="text" default="watched_status" visible="eq(-7,1)" />
+        <setting id="sync_on_startup" label="Sync on Startup" type="bool" default="false" />
         <setting id="sync_interval" label="Sync Interval (Minutes)" type="slider" default="15" range="1,1,1440" option="int" />
     </category>
 </settings>
