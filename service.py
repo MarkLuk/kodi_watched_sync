@@ -37,6 +37,9 @@ class SyncService:
                 self.monitor = WatchedSyncMonitor(self.db_manager)
             else:
                 self.monitor.db_manager = self.db_manager
+
+            # Link monitor to sync_manager
+            self.sync_manager.monitor = self.monitor
         else:
             self.sync_manager = None
 
@@ -82,6 +85,15 @@ class SyncService:
             if not self.db_manager:
                  logger.error("Cannot sync: Database not configured.")
             return
+
+        # Debounce: If there are pending updates, wait until they are flushed.
+        # This prevents the sync from reading old local state while the monitor is about to write new state.
+        if self.monitor:
+            retries = 0
+            while self.monitor.has_pending_updates() and retries < 10:
+                logger.info("Sync delayed due to pending updates...")
+                time.sleep(5.0)
+                retries += 1
 
         # Service always performs Import (Remote to Local)
         self.sync_manager.sync_remote_to_local()

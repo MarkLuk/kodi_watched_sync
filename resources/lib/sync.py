@@ -8,6 +8,8 @@ class SyncManager:
         Initialize the SyncManager with a reference to the database manager.
         """
         self.db_manager = db_manager
+        self.db_manager = db_manager
+        self.monitor = None
         self.import_guard_seconds = 15
 
     def sync_remote_to_local(self):
@@ -101,6 +103,11 @@ class SyncManager:
         if abs(local_resume - remote_resume) > 1.0:
             updates['resume'] = {'position': remote_resume}
             needs_update = True
+
+        # Check for pending updates in monitor
+        if self.monitor and self.monitor.is_pending(local_item['file']):
+            logger.info(f"Skipping import for {local_item['file']}: pending update in queue.")
+            return
 
         if needs_update:
             if hasattr(self.db_manager, "recently_updated"):

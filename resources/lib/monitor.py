@@ -107,3 +107,17 @@ class WatchedSyncMonitor(xbmc.Monitor):
 
         except Exception as e:
             logger.error(f"Error parsing JSON RPC response: {e}")
+
+    def has_pending_updates(self):
+        """
+        Returns True if there are pending updates in the queue.
+        """
+        with self.queue_lock:
+            return bool(self.batch_queue)
+
+    def is_pending(self, filepath):
+        """
+        Returns True if the given filepath has a pending update.
+        """
+        with self.queue_lock:
+            return filepath in self.batch_queue
