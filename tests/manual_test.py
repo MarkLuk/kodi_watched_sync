@@ -107,6 +107,7 @@ def test_monitor():
     xbmc.executeJSONRPC = mock_rpc
 
     monitor.onNotification("sender", "VideoLibrary.OnUpdate", json.dumps({"item": {"type": "movie", "id": 1}}))
+    monitor._flush_queue()
 
     data = db_manager.read_database()
     assert "path/to/avatar.mkv" in data
@@ -218,6 +219,8 @@ def test_sync_manager():
 
     xbmc.executeJSONRPC = mock_rpc_import
     # DB already has it watched from export step
+    with db.local_updates_lock:
+        db.local_updates.clear()
     sync.sync_remote_to_local()
 
     # Verify SetMovieDetails called
@@ -419,6 +422,86 @@ def test_checksum_validation():
     assert len(data) == 0 # Recovery rejected, started fresh (empty)
     print("  Checksum Validation (Corrupt Backup Rejection) test passed.")
 
+def test_scan_behavior():
+    print("Testing Scan Behavior...")
+    db_path = os.path.join(os.getcwd(), "tests", "watched.csv")
+    if os.path.exists(db_path): os.remove(db_path)
+    db_manager = DatabaseManager(db_path)
+    monitor = WatchedSyncMonitor(db_manager)
+
+    # 1. Setup: Item exists in DB as WATCHED
+    db_manager.update_item("path/to/existing_movie.mkv", True, 0.0)
+
+    # Mock RPC to return unwatched status (simulating a fresh item from scan)
+    def mock_rpc_scan(cmd):
+        cmd_json = json.loads(cmd)
+        if "GetMovieDetails" in cmd_json['method']:
+            return json.dumps({
+                "result": {
+                    "moviedetails": {
+                        "file": "path/to/existing_movie.mkv",
+                        "playcount": 0, # Unwatched in Kodi (newly added)
+                        "resume": {"position": 0}
+                    }
+                }
+            })
+        return "{}"
+    xbmc.executeJSONRPC = mock_rpc_scan
+
+    # 2. Simulate Scan Start
+    monitor.onNotification("sender", "VideoLibrary.OnScanStarted", "{}")
+
+    # 3. Simulate OnUpdate for the item (Kodi adding it)
+    monitor.onNotification("sender", "VideoLibrary.OnUpdate", json.dumps({"item": {"type": "movie", "id": 100}}))
+
+    # Give the thread a moment to process (if flush happened)
+    # The monitor queues and flushes in 5s, but we can check if it queued anything
+    # Or simpler: force flush if we can, or just check DB after wait.
+    # The current monitor uses a 5s timer. We can't wait 5s in test realistically if we want it fast.
+    # We can invoke _flush_queue manually if needed, or check the batch_queue directly.
+
+    # Wait a bit for the processing (not flush)
+    # The _process_library_update happens sync in onNotification?
+    # Yes, it calls _process_library_update which waits for RPC (mocked) then puts in queue.
+
+    # Verify queue is EMPTY (or ITEM NOT UPDATED) because we are scanning and it is unwatched.
+    with monitor.queue_lock:
+        if "path/to/existing_movie.mkv" in monitor.batch_queue:
+            # If it IS in the queue, it means it WILL be overwritten.
+            # IN THE FIX, it should NOT be in the queue.
+            # CURRENTLY without fix, it probably IS in the queue.
+           pass
+
+    # Let's force flush to be sure what hits DB
+    monitor._flush_queue()
+
+    data = db_manager.read_database()
+    assert "path/to/existing_movie.mkv" in data
+
+    # EXPECTATION with fix: Still True.
+    # EXPECTATION without fix: False (overwritten).
+    if data["path/to/existing_movie.mkv"]["watched"] == False:
+        print("  [FAIL] Scan overwrote watched status!")
+        # We want to assert this eventually, but for now let's assert True to confirm it fails first?
+        # Or just assert True and let it fail.
+        # assert data["path/to/existing_movie.mkv"]["watched"] == True
+    else:
+        print("  [PASS] Scan did not overwrite watched status.")
+
+    assert data["path/to/existing_movie.mkv"]["watched"] == True
+
+    # 4. Simulate Scan Finished
+    monitor.onNotification("sender", "VideoLibrary.OnScanFinished", "{}")
+
+    # 5. Simulate Manual Unwatch (OnUpdate with playcount 0 AFTER scan)
+    # This SHOULD update DB.
+    monitor.onNotification("sender", "VideoLibrary.OnUpdate", json.dumps({"item": {"type": "movie", "id": 100}}))
+    monitor._flush_queue()
+
+    data = db_manager.read_database()
+    assert data["path/to/existing_movie.mkv"]["watched"] == False
+    print("  Scan Behavior test passed.")
+
 if __name__ == "__main__":
     test_database_locking()
     test_manual_update()
@@ -431,4 +514,5 @@ if __name__ == "__main__":
     test_bulk_update()
     test_crash_recovery()
     test_checksum_validation()
+    test_scan_behavior()
     print("ALL TESTS PASSED")

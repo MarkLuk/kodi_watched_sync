@@ -13,15 +13,28 @@ class WatchedSyncMonitor(xbmc.Monitor):
         self.db_manager = db_manager
         self.batch_queue = {}
         self.batch_timer = None
+        self.is_scanning = False
         self.queue_lock = threading.Lock()
 
     def onNotification(self, sender, method, data):
         """
         Callback for Kodi notifications.
         Listens for 'VideoLibrary.OnUpdate' to capture watched status or resume point changes.
+        Also tracks scan status to prevent overwrites.
         """
+        if method == "VideoLibrary.OnScanStarted":
+            self.is_scanning = True
+            logger.info("Scan started. Monitoring suspended for new items.")
+        elif method == "VideoLibrary.OnScanFinished":
+            self.is_scanning = False
+            logger.info("Scan finished. Monitoring resumed.")
+
         # Listen for VideoLibrary.OnUpdate to capture watched/resume changes
         if method == "VideoLibrary.OnUpdate":
+            if self.is_scanning:
+                logger.debug("Ignoring update during scan.")
+                return
+
             try:
                 data_json = json.loads(data)
                 if 'item' in data_json:
